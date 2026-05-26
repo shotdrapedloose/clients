@@ -208,6 +208,7 @@ body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--t
     <button class="nav-item active" onclick="showPanel('add')"><span class="nav-icon">＋</span> Log appointment</button>
     <button class="nav-item" onclick="showPanel('clients')"><span class="nav-icon">◎</span> All clients</button>
     <button class="nav-item" onclick="showPanel('followups')"><span class="nav-icon">◷</span> Follow-ups <span class="nav-badge" id="fu-badge" style="display:none"></span></button>
+    <button class="nav-item" onclick="showPanel('cases')"><span class="nav-icon">◈</span> Cases 2026</button>
     <button class="nav-item" onclick="exportExcel()"><span class="nav-icon">↓</span> Export to Excel</button>
     <button class="nav-item" onclick="document.getElementById('import-input').click()"><span class="nav-icon">↑</span> Import from Excel</button>
     <input type="file" id="import-input" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)" />
@@ -262,7 +263,34 @@ body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--t
           <div class="field"><label>Follow-up by</label><input type="date" id="f-date" /></div>
         </div>
         <div class="field"><label>Reminder note</label><input type="text" id="f-reminder" placeholder="e.g. Send proposal, follow up on spouse coverage…" /></div>
-        <div style="display:flex;justify-content:flex-end;margin-top:4px">
+        <!-- CASE SECTION -->
+        <div style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:500;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-2);margin:0">
+              <input type="checkbox" id="f-is-case" onchange="toggleCaseFields()" style="width:16px;height:16px;cursor:pointer" />
+              Log as open case (sales production)
+            </label>
+          </div>
+          <div id="case-fields" style="display:none">
+            <div class="grid2">
+              <div class="field"><label>Date met</label><input type="date" id="f-case-date" /></div>
+              <div class="field"><label>Remarks</label><input type="text" id="f-case-remarks" placeholder="e.g. Sold term life plan" /></div>
+            </div>
+            <div class="grid2">
+              <div class="field"><label>API (S$)</label><input type="number" id="f-api" placeholder="0" min="0" step="0.01" /></div>
+              <div class="field"><label>PruCredits</label><input type="number" id="f-pc" placeholder="0" min="0" step="0.01" /></div>
+            </div>
+            <div class="grid2">
+              <div class="field"><label>A&amp;H API (S$)</label><input type="number" id="f-ah-api" placeholder="0" min="0" step="0.01" /></div>
+              <div class="field"><label>A&amp;H PC</label><input type="number" id="f-ah-pc" placeholder="0" min="0" step="0.01" /></div>
+            </div>
+            <div class="grid2">
+              <div class="field"><label>Extra API (S$)</label><input type="number" id="f-extra-api" placeholder="0" min="0" step="0.01" /></div>
+              <div class="field"><label>Extra PC</label><input type="number" id="f-extra-pc" placeholder="0" min="0" step="0.01" /></div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:16px">
           <button class="btn-save" id="save-btn" onclick="saveAppointment()">&#10003; Save &amp; sync to Drive</button>
         </div>
       </div>
@@ -301,6 +329,23 @@ body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--t
         <div class="page-sub">Clients needing action, sorted by priority</div>
       </div>
       <div id="fu-list"></div>
+    </div>
+    <!-- CASES 2026 -->
+    <div id="panel-cases" class="panel">
+      <div class="page-header">
+        <div class="page-title">Cases 2026</div>
+        <div class="page-sub">All clients with logged sales production</div>
+      </div>
+      <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
+        <div class="stat-card"><div class="stat-num" id="cs-count">—</div><div class="stat-label">Cases</div></div>
+        <div class="stat-card open"><div class="stat-num" id="cs-api">—</div><div class="stat-label">Total API (S$)</div></div>
+        <div class="stat-card meeting"><div class="stat-num" id="cs-pc">—</div><div class="stat-label">Total PC</div></div>
+        <div class="stat-card others"><div class="stat-num" id="cs-ahapi">—</div><div class="stat-label">A&amp;H API (S$)</div></div>
+      </div>
+      <div class="search-bar">
+        <input type="text" id="csq" placeholder="Search name, remarks…" oninput="renderCases()" />
+      </div>
+      <div id="cases-list"></div>
     </div>
   </main>
 </div>
@@ -447,10 +492,11 @@ function showPanel(name) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
-  const idx = ['add','clients','followups'].indexOf(name);
+  const idx = ['add','clients','followups','cases'].indexOf(name);
   if (idx >= 0) document.querySelectorAll('.nav-item')[idx].classList.add('active');
   if (name === 'clients') { loadFromDrive().then(() => renderClients()); }
   if (name === 'followups') { loadFromDrive().then(() => renderFollowups()); }
+  if (name === 'cases') { loadFromDrive().then(() => renderCases()); }
 }
 
 function badge(t) {
@@ -562,6 +608,22 @@ async function saveAppointment() {
     });
     toast('New client added');
   }
+  // Save case data if checked
+  if (document.getElementById('f-is-case').checked) {
+    const target = mode === 'existing' ? clients.find(c=>c.id===selectedId) : clients[0];
+    if (target) {
+      target.case = {
+        dateMet: document.getElementById('f-case-date').value,
+        remarks: document.getElementById('f-case-remarks').value.trim(),
+        api: document.getElementById('f-api').value,
+        pc: document.getElementById('f-pc').value,
+        ahApi: document.getElementById('f-ah-api').value,
+        ahPc: document.getElementById('f-ah-pc').value,
+        extraApi: document.getElementById('f-extra-api').value,
+        extraPc: document.getElementById('f-extra-pc').value,
+      };
+    }
+  }
   resetForm(); updateAll();
   await saveToDrive();
   btn.disabled = false; btn.textContent = '✓ Save & sync to Drive';
@@ -570,6 +632,9 @@ async function saveAppointment() {
 function resetForm() {
   ['f-name','f-phone','f-email','f-notes','f-reminder','f-date'].forEach(id => document.getElementById(id).value='');
   document.getElementById('f-status').value = 'none';
+  document.getElementById('f-is-case').checked = false;
+  document.getElementById('case-fields').style.display = 'none';
+  ['f-case-date','f-case-remarks','f-api','f-pc','f-ah-api','f-ah-pc','f-extra-api','f-extra-pc'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
   setMode('new');
 }
 
@@ -755,6 +820,9 @@ function exportExcel() {
   if (!clients.length) { toast('No clients to export'); return; }
   if (typeof XLSX === 'undefined') { toast('Excel library not loaded yet — try again'); return; }
   const statusLabel = { none:'No follow-up', open:'Open', closed:'Closed', meeting:'Schedule next meeting', others:'Others' };
+  const wb = XLSX.utils.book_new();
+
+  // Sheet 1 — Clients
   const rows = [];
   clients.forEach(c => {
     const appts = c.appointments || [];
@@ -770,10 +838,29 @@ function exportExcel() {
       });
     }
   });
-  const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [20,14,24,20,14,28,18,50].map(w=>({wch:w}));
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Clients');
+  const ws1 = XLSX.utils.json_to_sheet(rows);
+  ws1['!cols'] = [20,14,24,20,14,28,18,50].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws1, 'Clients');
+
+  // Sheet 2 — Cases 2026
+  const caseRows = clients.filter(c => c.case).map(c => ({
+    'Name': c.name,
+    'Phone': c.phone||'',
+    'Date met': c.case.dateMet||'',
+    'Remarks': c.case.remarks||'',
+    'API (S$)': parseFloat(c.case.api)||0,
+    'PruCredits': parseFloat(c.case.pc)||0,
+    'A&H API (S$)': parseFloat(c.case.ahApi)||0,
+    'A&H PC': parseFloat(c.case.ahPc)||0,
+    'Extra API (S$)': parseFloat(c.case.extraApi)||0,
+    'Extra PC': parseFloat(c.case.extraPc)||0,
+  }));
+  if (caseRows.length) {
+    const ws2 = XLSX.utils.json_to_sheet(caseRows);
+    ws2['!cols'] = [20,14,14,30,12,12,14,10,14,10].map(w=>({wch:w}));
+    XLSX.utils.book_append_sheet(wb, ws2, 'Cases 2026');
+  }
+
   XLSX.writeFile(wb, 'clients_' + new Date().toISOString().slice(0,10) + '.xlsx');
   toast('Excel downloaded ✓');
 }
@@ -826,6 +913,133 @@ function importExcel(event) {
     event.target.value='';
   };
   reader.readAsArrayBuffer(file);
+}
+
+
+// ── Cases ────────────────────────────────────────────────
+function toggleCaseFields() {
+  const checked = document.getElementById('f-is-case').checked;
+  document.getElementById('case-fields').style.display = checked ? 'block' : 'none';
+  if (checked && !document.getElementById('f-case-date').value) {
+    document.getElementById('f-case-date').value = new Date().toISOString().slice(0,10);
+  }
+}
+
+function renderCases() {
+  const q = (document.getElementById('csq').value || '').toLowerCase();
+  const cases = clients.filter(c => c.case);
+  const filtered = cases.filter(c => {
+    const txt = [c.name, c.case.remarks].join(' ').toLowerCase();
+    return !q || txt.includes(q);
+  });
+
+  // Totals
+  const totalAPI = cases.reduce((s,c) => s + (parseFloat(c.case.api)||0), 0);
+  const totalPC  = cases.reduce((s,c) => s + (parseFloat(c.case.pc)||0), 0);
+  const totalAHAPI = cases.reduce((s,c) => s + (parseFloat(c.case.ahApi)||0), 0);
+  document.getElementById('cs-count').textContent = cases.length;
+  document.getElementById('cs-api').textContent = totalAPI.toLocaleString('en-SG', {minimumFractionDigits:0, maximumFractionDigits:0});
+  document.getElementById('cs-pc').textContent = totalPC.toLocaleString('en-SG', {minimumFractionDigits:0, maximumFractionDigits:0});
+  document.getElementById('cs-ahapi').textContent = totalAHAPI.toLocaleString('en-SG', {minimumFractionDigits:0, maximumFractionDigits:0});
+
+  const el = document.getElementById('cases-list');
+  if (!filtered.length) { el.innerHTML = '<div class="empty"><div class="empty-icon">◈</div>No cases yet — tick "Log as open case" when saving an appointment</div>'; return; }
+
+  el.innerHTML = filtered.map(c => {
+    const cs = c.case;
+    return `<div class="client-card">
+      <div class="cc-top">
+        <div>
+          <div class="cc-name">${c.name}</div>
+          <div class="cc-meta">
+            ${c.phone ? '<span>'+c.phone+'</span>' : ''}
+            ${cs.dateMet ? '<span>Met '+fmtDate(cs.dateMet)+'</span>' : ''}
+          </div>
+        </div>
+        ${badge(c.status)}
+      </div>
+      ${cs.remarks ? '<div class="cc-notes" style="margin-top:8px">'+cs.remarks+'</div>' : ''}
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px">
+        ${caseNum('API', cs.api)}
+        ${caseNum('PC', cs.pc)}
+        ${caseNum('A&H API', cs.ahApi)}
+        ${caseNum('A&H PC', cs.ahPc)}
+        ${caseNum('Extra API', cs.extraApi)}
+        ${caseNum('Extra PC', cs.extraPc)}
+      </div>
+      <div class="cc-actions">
+        <button class="btn-sm" onclick="openCaseEdit(${c.id})">Edit case</button>
+        <button class="btn-sm" onclick="openHistory(${c.id})">History</button>
+        <button class="btn-sm danger" onclick="removeCase(${c.id})">Remove case</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function caseNum(label, val) {
+  const v = parseFloat(val) || 0;
+  if (!v) return '';
+  return `<div style="background:var(--bg);border-radius:8px;padding:8px 10px"><div style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.05em">${label}</div><div style="font-size:14px;font-weight:500;margin-top:2px">${v.toLocaleString('en-SG')}</div></div>`;
+}
+
+function openCaseEdit(id) {
+  const c = clients.find(c=>c.id===id);
+  if (!c) return;
+  editId = id;
+  const cs = c.case || {};
+  document.getElementById('modal-body').innerHTML = `
+    <div class="modal-head">
+      <span class="modal-title">Edit case — ${c.name}</span>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Date met</label><input type="date" id="ec-date" value="${cs.dateMet||''}" /></div>
+      <div class="field"><label>Remarks</label><input type="text" id="ec-remarks" value="${cs.remarks||''}" /></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>API (S$)</label><input type="number" id="ec-api" value="${cs.api||''}" placeholder="0" /></div>
+      <div class="field"><label>PruCredits</label><input type="number" id="ec-pc" value="${cs.pc||''}" placeholder="0" /></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>A&amp;H API</label><input type="number" id="ec-ahapi" value="${cs.ahApi||''}" placeholder="0" /></div>
+      <div class="field"><label>A&amp;H PC</label><input type="number" id="ec-ahpc" value="${cs.ahPc||''}" placeholder="0" /></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Extra API</label><input type="number" id="ec-exapi" value="${cs.extraApi||''}" placeholder="0" /></div>
+      <div class="field"><label>Extra PC</label><input type="number" id="ec-expc" value="${cs.extraPc||''}" placeholder="0" /></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px">
+      <button class="btn-sm" onclick="closeModal()">Cancel</button>
+      <button class="btn-save" onclick="saveCaseEdit()">Save &amp; sync</button>
+    </div>`;
+  document.getElementById('modal').classList.add('open');
+}
+
+async function saveCaseEdit() {
+  const c = clients.find(c=>c.id===editId);
+  if (!c) return;
+  c.case = {
+    dateMet: document.getElementById('ec-date').value,
+    remarks: document.getElementById('ec-remarks').value.trim(),
+    api: document.getElementById('ec-api').value,
+    pc: document.getElementById('ec-pc').value,
+    ahApi: document.getElementById('ec-ahapi').value,
+    ahPc: document.getElementById('ec-ahpc').value,
+    extraApi: document.getElementById('ec-exapi').value,
+    extraPc: document.getElementById('ec-expc').value,
+  };
+  closeModal(); renderCases();
+  await saveToDrive();
+  toast('Case saved & synced');
+}
+
+async function removeCase(id) {
+  if (!confirm('Remove this case record? Client stays in the master list.')) return;
+  const c = clients.find(c=>c.id===id);
+  if (c) delete c.case;
+  renderCases();
+  await saveToDrive();
+  toast('Case removed');
 }
 
 document.addEventListener('click', e => {
